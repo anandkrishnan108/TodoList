@@ -75,6 +75,28 @@ fun Long?.toFormattedDateString(pattern: String = "yyyy-MM-dd"): String {
     }
 }
 
+// Helper function to parse String to Long timestamp (milliseconds)
+// Returns null if parsing fails. Assumes input is "yyyy-MM-dd".
+fun String?.parseDateToMillis(): Long? {
+    if (this.isNullOrBlank()) return null
+    return try {
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        sdf.timeZone = TimeZone.getTimeZone("UTC") // Assume input date is in local context, convert to UTC midnight
+        val date = sdf.parse(this)
+        // To get UTC midnight for the selected day
+        val calendar = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        calendar.time = date ?: return null
+        calendar.set(Calendar.HOUR_OF_DAY, 0)
+        calendar.set(Calendar.MINUTE, 0)
+        calendar.set(Calendar.SECOND, 0)
+        calendar.set(Calendar.MILLISECOND, 0)
+        calendar.timeInMillis
+    } catch (e: Exception) {
+        null
+    }
+}
+
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun App() {
@@ -84,14 +106,18 @@ fun App() {
     var isRefreshingManual by remember { mutableStateOf(false) }
     val pullToRefreshState = rememberPullToRefreshState()
 
-    // State for Dialog
+    // State for Add/Edit Dialog
     var showAddEditDialog by remember { mutableStateOf(false) }
     var editingTodo by remember { mutableStateOf<TodoListItem?>(null) }
     var todoTitleInput by remember { mutableStateOf(TextFieldValue("")) }
     var todoDescriptionInput by remember { mutableStateOf(TextFieldValue("")) }
-    var selectedDueDateMillis by remember { mutableStateOf<Long?>(null) } // Store selected due date as Long (milliseconds)
+    var selectedDueDateMillis by remember { mutableStateOf<Long?>(null) }
 
     var showDatePickerDialog by remember { mutableStateOf(false) }
+
+    // State for Delete Confirmation Dialog
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var taskToDelete by remember { mutableStateOf<TodoListItem?>(null) }
 
 
     MaterialTheme {
@@ -110,7 +136,7 @@ fun App() {
                     editingTodo = null
                     todoTitleInput = TextFieldValue("")
                     todoDescriptionInput = TextFieldValue("")
-                    selectedDueDateMillis = null // Reset selected date
+                    selectedDueDateMillis = null
                     showAddEditDialog = true
                 }) {
                     Icon(Icons.Filled.Add, contentDescription = "Add new task")
@@ -157,12 +183,12 @@ fun App() {
                                         editingTodo = todoItem
                                         todoTitleInput = TextFieldValue(todoItem.title)
                                         todoDescriptionInput = TextFieldValue(todoItem.description ?: "")
-                                        // Assuming todoItem.dueDate is Long timestamp in seconds
                                         selectedDueDateMillis = todoItem.dueDate?.times(1000L)
                                         showAddEditDialog = true
                                     },
-                                    onDelete = {
-                                        viewModel.deleteTodo(todoItem) // Consider adding a confirmation dialog here
+                                    onDeleteRequest = { // Changed from onDelete
+                                        taskToDelete = todoItem
+                                        showDeleteConfirmDialog = true
                                     }
                                 )
                                 HorizontalDivider()
@@ -185,7 +211,6 @@ fun App() {
                 onClearDueDate = { selectedDueDateMillis = null },
                 onDismiss = { showAddEditDialog = false },
                 onConfirm = { title, description, dueDateMillis ->
-                    // Convert dueDateMillis (Long?) to dueDateSeconds (Long?) for ViewModel if needed
                     val dueDateSeconds = dueDateMillis?.div(1000L)
                     if (editingTodo == null) {
                         viewModel.addTodo(title, description, dueDateSeconds)
@@ -228,6 +253,22 @@ fun App() {
                 DatePicker(state = datePickerState)
             }
         }
+
+        // Conditionally display the Delete Confirmation Dialog
+        if (showDeleteConfirmDialog) {
+            DeleteConfirmationDialog(
+                taskName = taskToDelete?.title ?: "this task",
+                onConfirmDelete = {
+                    taskToDelete?.let { viewModel.deleteTodo(it) }
+                    showDeleteConfirmDialog = false
+                    taskToDelete = null // Reset after deletion
+                },
+                onDismiss = {
+                    showDeleteConfirmDialog = false
+                    taskToDelete = null // Reset if dismissed
+                }
+            )
+        }
     }
 }
 
@@ -236,7 +277,7 @@ fun TodoItemRow(
     todo: TodoListItem,
     onToggleComplete: () -> Unit,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDeleteRequest: () -> Unit // Changed from onDelete to onDeleteRequest
 ) {
     ListItem(
         modifier = Modifier.clickable(onClick = onEdit),
@@ -256,7 +297,7 @@ fun TodoItemRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                todo.dueDate?.let { // Assuming dueDate is Long (seconds)
+                todo.dueDate?.let {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
                         Icon(
                             Icons.Filled.Notifications,
@@ -266,7 +307,6 @@ fun TodoItemRow(
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            // Display formatted date (dueDate is in seconds, convert to millis for formatting)
                             text = "Due: ${it.times(1000L).toFormattedDateString()}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.secondary
@@ -289,7 +329,7 @@ fun TodoItemRow(
                 IconButton(onClick = onEdit, modifier = Modifier.size(40.dp)) {
                     Icon(Icons.Filled.Edit, contentDescription = "Edit task", tint = MaterialTheme.colorScheme.secondary)
                 }
-                IconButton(onClick = onDelete, modifier = Modifier.size(40.dp)) {
+                IconButton(onClick = onDeleteRequest, modifier = Modifier.size(40.dp)) { // Changed from onDelete
                     Icon(Icons.Filled.Delete, contentDescription = "Delete task", tint = MaterialTheme.colorScheme.error)
                 }
             }
@@ -304,13 +344,13 @@ fun AddEditTodoDialog(
     editingTodo: TodoListItem?,
     currentTitle: TextFieldValue,
     currentDescription: TextFieldValue,
-    selectedDueDateMillis: Long?, // Changed from TextFieldValue to Long?
+    selectedDueDateMillis: Long?,
     onTitleChange: (TextFieldValue) -> Unit,
     onDescriptionChange: (TextFieldValue) -> Unit,
-    onShowDatePicker: () -> Unit, // Callback to show date picker
-    onClearDueDate: () -> Unit, // Callback to clear due date
+    onShowDatePicker: () -> Unit,
+    onClearDueDate: () -> Unit,
     onDismiss: () -> Unit,
-    onConfirm: (title: String, description: String?, dueDateMillis: Long?) -> Unit // Passes Long? for millis
+    onConfirm: (title: String, description: String?, dueDateMillis: Long?) -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -331,8 +371,6 @@ fun AddEditTodoDialog(
                     modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
                     maxLines = 3
                 )
-
-                // Due Date Display and Picker Trigger
                 Text("Due Date", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 8.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -352,8 +390,6 @@ fun AddEditTodoDialog(
                         }
                     }
                 }
-
-
                 Text(
                     "* Title is required.",
                     style = MaterialTheme.typography.bodySmall,
@@ -381,6 +417,33 @@ fun AddEditTodoDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("Cancel")
+            }
+        }
+    )
+}
+
+// New Composable for the Delete Confirmation Dialog
+@Composable
+fun DeleteConfirmationDialog(
+    taskName: String,
+    onConfirmDelete: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Confirm Delete") },
+        text = { Text("Are you sure you want to delete \"$taskName\"?") },
+        confirmButton = {
+            Button(
+                onClick = onConfirmDelete,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error) // Use error color for delete
+            ) {
+                Text("Yes, Delete")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("No")
             }
         }
     )
