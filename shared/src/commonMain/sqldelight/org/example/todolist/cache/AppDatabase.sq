@@ -1,0 +1,58 @@
+CREATE TABLE TodoList (
+  id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  description TEXT,
+  is_completed INTEGER NOT NULL DEFAULT 0, -- 0 for false, 1 for true
+  due_date INTEGER -- Store as Unix Timestamp (seconds since epoch)
+);
+
+CREATE INDEX TodoList_due_date_idx ON TodoList(due_date);
+
+-- Select all todos
+getAllTodos:
+SELECT * FROM TodoList ORDER BY due_date ASC, id ASC;
+
+-- Select a specific todo by its ID
+getTodoById:
+SELECT * FROM TodoList WHERE id = :id;
+
+getIncompleteTodos:
+SELECT * FROM TodoList WHERE is_completed = 0 ORDER BY due_date ASC, id ASC;
+
+-- Select todos that are not completed and are due by a certain time
+getIncompleteTodosDueBy:
+SELECT * FROM TodoList WHERE is_completed = 0 AND due_date IS NOT NULL AND due_date <= :timestamp;
+
+-- Insert a new todo item
+insertTodo:
+INSERT INTO TodoList (title, description, due_date)
+VALUES (:title, :description, :due_date);
+
+-- Update an existing todo item
+updateTodo:
+UPDATE TodoList
+SET title = :title,
+    description = :description,
+    is_completed = :is_completed,
+    due_date = :due_date
+WHERE id = :id;
+
+-- Mark a todo as completed
+markAsCompleted:
+UPDATE TodoList
+SET is_completed = 1
+WHERE id = :id;
+
+-- Mark a todo as not completed
+markAsIncomplete:
+UPDATE TodoList
+SET is_completed = 0
+WHERE id = :id;
+
+-- Delete a todo item by its ID
+deleteTodoById:
+DELETE FROM TodoList WHERE id = :id;
+
+-- Delete all completed todos
+deleteCompletedTodos:
+DELETE FROM TodoList WHERE is_completed = 1;
